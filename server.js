@@ -29,13 +29,14 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ======================== CONFIGURATION =====================
 
 const PORT       = process.env.PORT || 3000;
-const MONGO_URI  = process.env.MONGO_URI || 'mongodb://localhost:27017/CleaningStore';
+const MONGO_URI  = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'cleaning-store-secret-key-2024';
 
 // ======================== MONGODB ===========================
+const clientOptions = { serverApi: { version: '1', strict: true, deprecationErrors: true } };
 
 mongoose
-  .connect(MONGO_URI)
+  .connect(MONGO_URI, clientOptions)
   .then(() => {
     // Mask credentials when logging the URI
     const safeUri = MONGO_URI.replace(/\/\/[^@]+@/, '//<credentials>@');
