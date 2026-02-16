@@ -36,7 +36,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'cleaning-store-secret-key-2024';
 const clientOptions = { serverApi: { version: '1', strict: true, deprecationErrors: true } };
 
 mongoose
-  .connect(MONGO_URI)
+  .connect(MONGO_URI, clientOptions)
   .then(() => {
     // Mask credentials when logging the URI
    
