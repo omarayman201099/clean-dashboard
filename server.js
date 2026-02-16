@@ -35,11 +35,14 @@ const JWT_SECRET = process.env.JWT_SECRET || 'cleaning-store-secret-key-2024';
 // ======================== MONGODB ===========================
 
 mongoose
-  .connect(MONGO_URI)
+  .connect(MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
   .then(() => {
     // Mask credentials when logging the URI
-    const safeUri = MONGO_URI.replace(/\/\/[^@]+@/, '//<credentials>@');
-    console.log('MongoDB connected:', safeUri);
+   
+    console.log('MongoDB connected',);
   })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message);
