@@ -33,14 +33,17 @@ const MONGO_URI  = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET || 'cleaning-store-secret-key-2024';
 
 // ======================== MONGODB ===========================
-const clientOptions = { serverApi: { version: '1', strict: true, deprecationErrors: true } };
+
+if (!MONGO_URI) {
+  console.error('FATAL: MONGO_URI environment variable is not set.');
+  console.error('Please add MONGO_URI to your Railway environment variables.');
+  process.exit(1);
+}
 
 mongoose
-  .connect(MONGO_URI, clientOptions)
+  .connect(MONGO_URI)
   .then(() => {
-    // Mask credentials when logging the URI
-   
-    console.log('MongoDB connected',);
+    console.log('MongoDB connected successfully');
   })
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message);
@@ -133,19 +136,10 @@ const upload = multer({
 
 // ======================== JWT HELPERS ========================
 
-/**
- * Generate a signed JWT.
- * @param {object} payload - Data to encode (e.g. { id, type }).
- * @returns {string} Signed token.
- */
 function generateToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
 }
 
-/**
- * Express middleware — verifies Bearer token and attaches decoded
- * payload to `req.user`.
- */
 function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
@@ -162,9 +156,6 @@ function authenticateToken(req, res, next) {
   }
 }
 
-/**
- * Validate that a string is a valid MongoDB ObjectId.
- */
 function isValidObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
@@ -258,7 +249,6 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
-    // First registered admin becomes superadmin
     const count = await Admin.countDocuments();
     const role  = count === 0 ? 'superadmin' : 'admin';
 
@@ -336,7 +326,6 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 //  ROUTES — CATEGORIES
 // ============================================================
 
-// List all categories
 app.get('/api/categories', async (_req, res) => {
   try {
     const categories = await Category.find().sort({ name: 1 });
@@ -347,7 +336,6 @@ app.get('/api/categories', async (_req, res) => {
   }
 });
 
-// Get single category
 app.get('/api/categories/:id', async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -366,7 +354,6 @@ app.get('/api/categories/:id', async (req, res) => {
   }
 });
 
-// Create category (protected)
 app.post('/api/categories', authenticateToken, async (req, res) => {
   try {
     const { name, description } = req.body;
@@ -386,7 +373,6 @@ app.post('/api/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Update category (protected)
 app.put('/api/categories/:id', authenticateToken, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -414,7 +400,6 @@ app.put('/api/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete category (protected — blocked when products use it)
 app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -443,7 +428,6 @@ app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
 //  ROUTES — PRODUCTS
 // ============================================================
 
-// List products (optional ?category= and ?all=true filters)
 app.get('/api/products', async (req, res) => {
   try {
     const { category, all } = req.query;
@@ -453,7 +437,6 @@ app.get('/api/products', async (req, res) => {
       filter.category = category;
     }
 
-    // By default hide out-of-stock products; admin passes ?all=true
     if (!all || all === 'false') {
       filter.stock = { $gt: 0 };
     }
@@ -466,7 +449,6 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// Get single product
 app.get('/api/products/:id', async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -485,7 +467,6 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// Create product (protected, with image upload)
 app.post('/api/products', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     const { name, description, price, category, stock } = req.body;
@@ -510,7 +491,6 @@ app.post('/api/products', authenticateToken, upload.single('image'), async (req,
   }
 });
 
-// Update product (protected, with optional image upload)
 app.put('/api/products/:id', authenticateToken, upload.single('image'), async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -528,10 +508,8 @@ app.put('/api/products/:id', authenticateToken, upload.single('image'), async (r
     if (description !== undefined) product.description = description;
     if (price !== undefined)       product.price       = parseFloat(price);
     if (category !== undefined)    product.category    = category;
-    // FIX: use !== undefined instead of truthy check so stock=0 works
     if (stock !== undefined)       product.stock       = parseInt(stock, 10);
 
-    // Handle new image — delete old file
     if (req.file) {
       if (product.image && product.image !== '/uploads/placeholder.svg') {
         const oldPath = path.join(__dirname, product.image);
@@ -549,7 +527,6 @@ app.put('/api/products/:id', authenticateToken, upload.single('image'), async (r
   }
 });
 
-// Delete product (protected)
 app.delete('/api/products/:id', authenticateToken, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -561,7 +538,6 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    // Remove uploaded image file
     if (product.image && product.image !== '/uploads/placeholder.svg') {
       const oldPath = path.join(__dirname, product.image);
       if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
@@ -579,7 +555,6 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 //  ROUTES — ORDERS
 // ============================================================
 
-// List all orders (protected)
 app.get('/api/orders', authenticateToken, async (_req, res) => {
   try {
     const orders = await Order.find().sort({ createdAt: -1 });
@@ -590,7 +565,6 @@ app.get('/api/orders', authenticateToken, async (_req, res) => {
   }
 });
 
-// Get single order (protected)
 app.get('/api/orders/:id', authenticateToken, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -609,7 +583,6 @@ app.get('/api/orders/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Create order (public — customers place orders)
 app.post('/api/orders', async (req, res) => {
   try {
     const { customerName, customerEmail, customerPhone, address, items, totalAmount } = req.body;
@@ -621,7 +594,6 @@ app.post('/api/orders', async (req, res) => {
       return res.status(400).json({ error: 'Order must contain at least one item' });
     }
 
-    // Decrement stock atomically — rollback on failure
     const decremented = [];
 
     for (const item of items) {
@@ -667,7 +639,6 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// Update order status (protected)
 app.put('/api/orders/:id/status', authenticateToken, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -697,7 +668,6 @@ app.put('/api/orders/:id/status', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete order (protected)
 app.delete('/api/orders/:id', authenticateToken, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
@@ -753,13 +723,13 @@ app.get('/admin', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Health-check / landing page
+// Health check
 app.get('/', (_req, res) => {
-  res.send('Cleaning Store Backend Running');
+  res.json({ status: 'ok', message: 'Cleaning Store Backend Running' });
 });
 
 // ============================================================
-//  ERROR HANDLERS
+//  ERROR HANDLERS  (must be AFTER all routes)
 // ============================================================
 
 // Multer & general errors
@@ -773,19 +743,19 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Something went wrong.' });
 });
 
-// 404
+// 404 — must be last
 app.use((_req, res) => {
   res.status(404).json({ error: 'Endpoint not found.' });
 });
 
 // ============================================================
-//  START SERVER  (single call — no duplicate listen)
+//  START SERVER
 // ============================================================
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log('='.repeat(50));
   console.log('  Cleaning Products Store Backend');
-  console.log(`  Server running at: http://localhost:${PORT}`);
-  console.log(`  Admin dashboard:   http://localhost:${PORT}/admin`);
+  console.log(`  Listening on port: ${PORT}`);
+  console.log(`  Admin dashboard:   /admin`);
   console.log('='.repeat(50));
 });
