@@ -1,113 +1,154 @@
 /* eslint-disable no-console */
 // ============================================================
-//  Cleaning Products Store — Main Server
+//  Cleaning Products Store — Main Server (Fixed & Secured)
 // ============================================================
 
 require('dotenv').config();
 
-const express = require('express');
-const mongoose = require('mongoose');
-const multer = require('multer');
-const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const express    = require('express');
+const mongoose   = require('mongoose');
+const multer     = require('multer');
+const cors       = require('cors');
+const path       = require('path');
+const fs         = require('fs');
+const bcrypt     = require('bcryptjs');
+const jwt        = require('jsonwebtoken');
+const rateLimit  = require('express-rate-limit');
+const helmet     = require('helmet');
 
 // ======================== EXPRESS APP ========================
 
 const app = express();
 
-app.use(cors());
+// ✅ FIX: helmet لحماية HTTP headers
+app.use(helmet({
+  contentSecurityPolicy: false, // عشان static files تشتغل — ضبطه لو عايز
+}));
+
+// ✅ FIX: CORS محدد بـ origin من environment
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files (admin UI, customer pages, uploaded images)
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ======================== CONFIGURATION =====================
 
-const PORT       = process.env.PORT || 3000;
-const MONGO_URI  = process.env.MONGO_URI;
-const JWT_SECRET = process.env.JWT_SECRET || 'cleaning-store-secret-key-2024';
+const PORT      = process.env.PORT || 3000;
+const MONGO_URI = process.env.MONGO_URI;
+
+// ✅ FIX: JWT_SECRET إجباري — مفيش fallback خطير
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set.');
+  console.error('Generate a strong secret and add it to your .env file.');
+  process.exit(1);
+}
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // ======================== MONGODB ===========================
 
 if (!MONGO_URI) {
   console.error('FATAL: MONGO_URI environment variable is not set.');
-  console.error('Please add MONGO_URI to your Railway environment variables.');
   process.exit(1);
 }
 
 mongoose
   .connect(MONGO_URI)
-  .then(() => {
-    console.log('MongoDB connected successfully');
-  })
+  .then(() => console.log('MongoDB connected successfully'))
   .catch((err) => {
     console.error('MongoDB connection failed:', err.message);
     process.exit(1);
   });
 
+// ======================== RATE LIMITERS =====================
+
+// ✅ FIX: Rate limiting على الـ auth endpoints لمنع brute force
+const authLimiter = rateLimit({
+  windowMs : 15 * 60 * 1000, // 15 دقيقة
+  max      : 10,
+  message  : { error: 'Too many attempts, please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders  : false,
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // ساعة
+  max     : 5,
+  message : { error: 'Too many registration attempts, please try again later.' },
+});
+
 // ======================== SCHEMAS & MODELS ==================
 
 const adminSchema = new mongoose.Schema({
-  username:  { type: String, required: true, unique: true, trim: true },
-  email:     { type: String, required: true, unique: true, trim: true, lowercase: true },
-  password:  { type: String, required: true },
-  phone:     { type: String, trim: true },
-  role:      { type: String, enum: ['superadmin', 'admin'], default: 'admin' },
+  username : { type: String, required: true, unique: true, trim: true },
+  email    : { type: String, required: true, unique: true, trim: true, lowercase: true },
+  password : { type: String, required: true },
+  phone    : { type: String, trim: true },
+  role     : { type: String, enum: ['superadmin', 'admin'], default: 'admin' },
   createdAt: { type: Date, default: Date.now },
 });
 
 const customerSchema = new mongoose.Schema({
-  username:  { type: String, required: true, trim: true },
-  email:     { type: String, required: true, unique: true, trim: true, lowercase: true },
-  password:  { type: String, required: true },
-  phone:     { type: String, trim: true },
+  username : { type: String, required: true, trim: true },
+  email    : { type: String, required: true, unique: true, trim: true, lowercase: true },
+  password : { type: String, required: true },
+  phone    : { type: String, trim: true },
   createdAt: { type: Date, default: Date.now },
 });
 
 const categorySchema = new mongoose.Schema({
-  name:        { type: String, required: true, unique: true, trim: true },
+  name       : { type: String, required: true, unique: true, trim: true },
   description: { type: String, default: '' },
-  createdAt:   { type: Date, default: Date.now },
-  updatedAt:   { type: Date },
+  createdAt  : { type: Date, default: Date.now },
+  updatedAt  : { type: Date },
 });
 
 const productSchema = new mongoose.Schema({
-  name:        { type: String, required: true, trim: true },
+  name       : { type: String, required: true, trim: true },
   description: { type: String, default: '' },
-  price:       { type: Number, required: true, min: 0 },
-  category:    { type: String, required: true },
-  stock:       { type: Number, default: 0, min: 0 },
-  image:       { type: String, default: '/uploads/placeholder.svg' },
-  createdAt:   { type: Date, default: Date.now },
-  updatedAt:   { type: Date },
+  price      : { type: Number, required: true, min: 0 },
+  category   : { type: String, required: true },
+  stock      : { type: Number, default: 0, min: 0 },
+  image      : { type: String, default: '/uploads/placeholder.svg' },
+  createdAt  : { type: Date, default: Date.now },
+  updatedAt  : { type: Date },
 });
 
+// ✅ FIX: items كـ nested schema محدد بدل Array مفتوح
+const orderItemSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+  name     : { type: String, required: true },
+  quantity : { type: Number, required: true, min: 1 },
+  price    : { type: Number, required: true, min: 0 },
+}, { _id: false });
+
 const orderSchema = new mongoose.Schema({
-  customerName:  { type: String, required: true },
+  customerName : { type: String, required: true },
   customerEmail: { type: String, required: true },
   customerPhone: { type: String },
-  address:       { type: String, required: true },
-  items:         { type: Array, default: [] },
-  totalAmount:   { type: Number, default: 0 },
+  address      : { type: String, required: true },
+  items        : { type: [orderItemSchema], default: [] },
+  totalAmount  : { type: Number, default: 0 },
   status: {
-    type: String,
+    type   : String,
     default: 'pending',
-    enum: ['pending', 'confirmed', 'delivered', 'cancelled'],
+    enum   : ['pending', 'confirmed', 'delivered', 'cancelled'],
   },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date },
 });
 
-const Admin    = mongoose.model('Admin', adminSchema);
+const Admin    = mongoose.model('Admin',    adminSchema);
 const Customer = mongoose.model('Customer', customerSchema);
 const Category = mongoose.model('Category', categorySchema);
-const Product  = mongoose.model('Product', productSchema);
-const Order    = mongoose.model('Order', orderSchema);
+const Product  = mongoose.model('Product',  productSchema);
+const Order    = mongoose.model('Order',    orderSchema);
 
 // ======================== FILE UPLOAD =======================
 
@@ -116,7 +157,7 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
+  filename   : (_req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, uniqueSuffix + path.extname(file.originalname));
   },
@@ -124,7 +165,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  limits    : { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = /jpeg|jpg|png|gif|webp/;
     const extOk   = allowed.test(path.extname(file.originalname).toLowerCase());
@@ -134,12 +175,15 @@ const upload = multer({
   },
 });
 
-// ======================== JWT HELPERS ========================
+// ======================== HELPERS ===========================
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function generateToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
 }
 
+// ✅ FIX: authenticateToken يحط role في req.user
 function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.split(' ')[1];
@@ -156,6 +200,22 @@ function authenticateToken(req, res, next) {
   }
 }
 
+// ✅ FIX: middleware للـ superadmin فقط
+function requireSuperAdmin(req, res, next) {
+  if (req.user.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Superadmin access required.' });
+  }
+  next();
+}
+
+// ✅ FIX: middleware للتأكد إن الطلب من admin مش customer
+function requireAdmin(req, res, next) {
+  if (req.user.type !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+  next();
+}
+
 function isValidObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id);
 }
@@ -164,12 +224,16 @@ function isValidObjectId(id) {
 //  ROUTES — CUSTOMER AUTH
 // ============================================================
 
-app.post('/api/customers/register', async (req, res) => {
+app.post('/api/customers/register', registerLimiter, async (req, res) => {
   try {
     const { username, email, password, phone } = req.body;
 
     if (!username || !email || !password) {
       return res.status(400).json({ error: 'username, email and password are required' });
+    }
+    // ✅ FIX: email format validation
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
     }
     if (password.length < 6) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
@@ -180,7 +244,7 @@ app.post('/api/customers/register', async (req, res) => {
       return res.status(400).json({ error: 'Email already in use' });
     }
 
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, 12); // ✅ FIX: 12 rounds بدل 10
     await Customer.create({ username, email, password: hash, phone });
 
     res.status(201).json({ message: 'Customer registered successfully' });
@@ -190,7 +254,7 @@ app.post('/api/customers/register', async (req, res) => {
   }
 });
 
-app.post('/api/customers/login', async (req, res) => {
+app.post('/api/customers/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -238,26 +302,53 @@ app.get('/api/customers/me', authenticateToken, async (req, res) => {
 //  ROUTES — ADMIN AUTH
 // ============================================================
 
-app.post('/api/auth/register', async (req, res) => {
+// ✅ FIX: أول admin بيبقى superadmin تلقائياً، بعد كده لازم superadmin يسجل
+app.post('/api/auth/register', registerLimiter, async (req, res) => {
   try {
     const { username, email, password, phone } = req.body;
 
     if (!username || !email || !password) {
       return res.status(400).json({ error: 'username, email and password are required' });
     }
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (!EMAIL_REGEX.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Admin password must be at least 8 characters' });
     }
 
     const count = await Admin.countDocuments();
-    const role  = count === 0 ? 'superadmin' : 'admin';
 
-    const hash  = await bcrypt.hash(password, 10);
+    // ✅ FIX: بعد أول admin، لازم superadmin مسجل دخول يعمل تسجيل جديد
+    if (count > 0) {
+      const authHeader = req.headers.authorization;
+      const token = authHeader && authHeader.split(' ')[1];
+
+      if (!token) {
+        return res.status(401).json({ error: 'Only a superadmin can register new admins.' });
+      }
+
+      let decoded;
+      try {
+        decoded = jwt.verify(token, JWT_SECRET);
+      } catch {
+        return res.status(403).json({ error: 'Invalid or expired token.' });
+      }
+
+      if (decoded.type !== 'admin' || decoded.role !== 'superadmin') {
+        return res.status(403).json({ error: 'Only a superadmin can register new admins.' });
+      }
+    }
+
+    const role  = count === 0 ? 'superadmin' : 'admin';
+    const hash  = await bcrypt.hash(password, 12);
     const admin = await Admin.create({ username, email, password: hash, role, phone });
-    const token = generateToken({ id: admin._id, type: 'admin' });
+
+    // ✅ FIX: role داخل الـ token
+    const newToken = generateToken({ id: admin._id, type: 'admin', role: admin.role });
 
     res.status(201).json({
-      token,
+      token: newToken,
       admin: { id: admin._id, username, email, role },
     });
   } catch (err) {
@@ -269,7 +360,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -287,15 +378,17 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = generateToken({ id: admin._id, type: 'admin' });
+    // ✅ FIX: role داخل الـ token
+    const token = generateToken({ id: admin._id, type: 'admin', role: admin.role });
+
     res.json({
       token,
       admin: {
-        id:       admin._id,
+        id      : admin._id,
         username: admin.username,
-        email:    admin.email,
-        phone:    admin.phone,
-        role:     admin.role,
+        email   : admin.email,
+        phone   : admin.phone,
+        role    : admin.role,
       },
     });
   } catch (err) {
@@ -304,17 +397,12 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-app.get('/api/auth/me', authenticateToken, async (req, res) => {
+app.get('/api/auth/me', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    if (req.user.type !== 'admin') {
-      return res.status(403).json({ error: 'Not an admin token' });
-    }
-
     const admin = await Admin.findById(req.user.id).select('-password');
     if (!admin) {
       return res.status(404).json({ error: 'Admin not found' });
     }
-
     res.json(admin);
   } catch (err) {
     console.error('GET /api/auth/me error:', err);
@@ -341,12 +429,10 @@ app.get('/api/categories/:id', async (req, res) => {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid category ID' });
     }
-
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ error: 'Category not found' });
     }
-
     res.json(category);
   } catch (err) {
     console.error('GET /api/categories/:id error:', err);
@@ -354,15 +440,13 @@ app.get('/api/categories/:id', async (req, res) => {
   }
 });
 
-app.post('/api/categories', authenticateToken, async (req, res) => {
+app.post('/api/categories', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { name, description } = req.body;
-
-    if (!name) {
+    if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Category name is required' });
     }
-
-    const category = await Category.create({ name, description });
+    const category = await Category.create({ name: name.trim(), description });
     res.status(201).json(category);
   } catch (err) {
     console.error('POST /api/categories error:', err);
@@ -373,19 +457,18 @@ app.post('/api/categories', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/categories/:id', authenticateToken, async (req, res) => {
+app.put('/api/categories/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid category ID' });
     }
-
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ error: 'Category not found' });
     }
 
     const { name, description } = req.body;
-    if (name) category.name = name;
+    if (name) category.name = name.trim();
     if (description !== undefined) category.description = description;
     category.updatedAt = Date.now();
 
@@ -400,12 +483,11 @@ app.put('/api/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.delete('/api/categories/:id', authenticateToken, async (req, res) => {
+app.delete('/api/categories/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid category ID' });
     }
-
     const category = await Category.findById(req.params.id);
     if (!category) {
       return res.status(404).json({ error: 'Category not found' });
@@ -436,7 +518,6 @@ app.get('/api/products', async (req, res) => {
     if (category && category !== 'all') {
       filter.category = category;
     }
-
     if (!all || all === 'false') {
       filter.stock = { $gt: 0 };
     }
@@ -454,12 +535,10 @@ app.get('/api/products/:id', async (req, res) => {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid product ID' });
     }
-
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
-
     res.json(product);
   } catch (err) {
     console.error('GET /api/products/:id error:', err);
@@ -467,21 +546,24 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-app.post('/api/products', authenticateToken, upload.single('image'), async (req, res) => {
+app.post('/api/products', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     const { name, description, price, category, stock } = req.body;
 
     if (!name || !price || !category) {
       return res.status(400).json({ error: 'name, price and category are required' });
     }
+    if (isNaN(parseFloat(price)) || parseFloat(price) < 0) {
+      return res.status(400).json({ error: 'Invalid price value' });
+    }
 
     const product = await Product.create({
       name,
       description,
-      price:    parseFloat(price),
+      price   : parseFloat(price),
       category,
-      stock:    parseInt(stock, 10) || 0,
-      image:    req.file ? '/uploads/' + req.file.filename : '/uploads/placeholder.svg',
+      stock   : parseInt(stock, 10) || 0,
+      image   : req.file ? '/uploads/' + req.file.filename : '/uploads/placeholder.svg',
     });
 
     res.status(201).json(product);
@@ -491,12 +573,11 @@ app.post('/api/products', authenticateToken, upload.single('image'), async (req,
   }
 });
 
-app.put('/api/products/:id', authenticateToken, upload.single('image'), async (req, res) => {
+app.put('/api/products/:id', authenticateToken, requireAdmin, upload.single('image'), async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid product ID' });
     }
-
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
@@ -527,12 +608,11 @@ app.put('/api/products/:id', authenticateToken, upload.single('image'), async (r
   }
 });
 
-app.delete('/api/products/:id', authenticateToken, async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid product ID' });
     }
-
     const product = await Product.findById(req.params.id);
     if (!product) {
       return res.status(404).json({ error: 'Product not found' });
@@ -555,7 +635,7 @@ app.delete('/api/products/:id', authenticateToken, async (req, res) => {
 //  ROUTES — ORDERS
 // ============================================================
 
-app.get('/api/orders', authenticateToken, async (_req, res) => {
+app.get('/api/orders', authenticateToken, requireAdmin, async (_req, res) => {
   try {
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
@@ -565,17 +645,15 @@ app.get('/api/orders', authenticateToken, async (_req, res) => {
   }
 });
 
-app.get('/api/orders/:id', authenticateToken, async (req, res) => {
+app.get('/api/orders/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
     }
-
     const order = await Order.findById(req.params.id);
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
     }
-
     res.json(order);
   } catch (err) {
     console.error('GET /api/orders/:id error:', err);
@@ -585,22 +663,30 @@ app.get('/api/orders/:id', authenticateToken, async (req, res) => {
 
 app.post('/api/orders', async (req, res) => {
   try {
-    const { customerName, customerEmail, customerPhone, address, items, totalAmount } = req.body;
+    const { customerName, customerEmail, customerPhone, address, items } = req.body;
 
     if (!customerName || !customerEmail || !address) {
       return res.status(400).json({ error: 'customerName, customerEmail and address are required' });
+    }
+    // ✅ FIX: email validation
+    if (!EMAIL_REGEX.test(customerEmail)) {
+      return res.status(400).json({ error: 'Invalid customer email format' });
     }
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Order must contain at least one item' });
     }
 
     const decremented = [];
+    const validatedItems = [];
+    // ✅ FIX: totalAmount محسوب على الـ server من الـ database مش من الـ client
+    let calculatedTotal = 0;
 
     for (const item of items) {
-      const prodId = item.id;
+      const prodId = item.id || item.productId;
       const qty    = Number(item.quantity) || 1;
 
       if (!isValidObjectId(prodId)) {
+        // Rollback
         for (const d of decremented) {
           await Product.findByIdAndUpdate(d.id, { $inc: { stock: d.qty } });
         }
@@ -614,6 +700,7 @@ app.post('/api/orders', async (req, res) => {
       );
 
       if (!updated) {
+        // Rollback
         for (const d of decremented) {
           await Product.findByIdAndUpdate(d.id, { $inc: { stock: d.qty } });
         }
@@ -621,6 +708,15 @@ app.post('/api/orders', async (req, res) => {
       }
 
       decremented.push({ id: prodId, qty });
+
+      // ✅ FIX: نستخدم السعر من الـ database مش من الـ client
+      calculatedTotal += updated.price * qty;
+      validatedItems.push({
+        productId: updated._id,
+        name     : updated.name,
+        quantity : qty,
+        price    : updated.price,
+      });
     }
 
     const order = await Order.create({
@@ -628,8 +724,8 @@ app.post('/api/orders', async (req, res) => {
       customerEmail,
       customerPhone,
       address,
-      items,
-      totalAmount,
+      items      : validatedItems,
+      totalAmount: parseFloat(calculatedTotal.toFixed(2)),
     });
 
     res.status(201).json(order);
@@ -639,7 +735,7 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-app.put('/api/orders/:id/status', authenticateToken, async (req, res) => {
+app.put('/api/orders/:id/status', authenticateToken, requireAdmin, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
@@ -668,17 +764,16 @@ app.put('/api/orders/:id/status', authenticateToken, async (req, res) => {
   }
 });
 
-app.delete('/api/orders/:id', authenticateToken, async (req, res) => {
+// ✅ FIX: حذف order للـ superadmin بس
+app.delete('/api/orders/:id', authenticateToken, requireAdmin, requireSuperAdmin, async (req, res) => {
   try {
     if (!isValidObjectId(req.params.id)) {
       return res.status(400).json({ error: 'Invalid order ID' });
     }
-
     const deleted = await Order.findByIdAndDelete(req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: 'Order not found' });
     }
-
     res.json({ message: 'Order deleted' });
   } catch (err) {
     console.error('DELETE /api/orders/:id error:', err);
@@ -690,7 +785,7 @@ app.delete('/api/orders/:id', authenticateToken, async (req, res) => {
 //  ROUTES — STATS
 // ============================================================
 
-app.get('/api/stats', authenticateToken, async (_req, res) => {
+app.get('/api/stats', authenticateToken, requireAdmin, async (_req, res) => {
   try {
     const [totalProducts, totalOrders, totalAdmins, salesAgg, statusAgg] =
       await Promise.all([
@@ -723,16 +818,14 @@ app.get('/admin', (_req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Health check
 app.get('/', (_req, res) => {
   res.json({ status: 'ok', message: 'Cleaning Store Backend Running' });
 });
 
 // ============================================================
-//  ERROR HANDLERS  (must be AFTER all routes)
+//  ERROR HANDLERS
 // ============================================================
 
-// Multer & general errors
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err.message);
 
@@ -743,7 +836,6 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Something went wrong.' });
 });
 
-// 404 — must be last
 app.use((_req, res) => {
   res.status(404).json({ error: 'Endpoint not found.' });
 });
