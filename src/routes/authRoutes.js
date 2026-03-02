@@ -5,10 +5,9 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
-const { authenticate } = require('../middlewares/authenticate');
-const { authorize } = require('../middlewares/authorize');
-const { validate } = require('../middlewares/validate');
-const { authLimiter, apiLimiter } = require('../middlewares/rateLimiter');
+const authenticate = require('../middlewares/authenticate');
+const { validate } = require('../utils/validators');
+const { authLimiter } = require('../middlewares/rateLimiter');
 const { adminRegisterSchema, adminLoginSchema, customerRegisterSchema, customerLoginSchema } = require('../utils/validators');
 
 // Public routes

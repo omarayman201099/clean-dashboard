@@ -61,7 +61,10 @@ if (!MONGO_URI) {
 // ======================== MONGODB ===========================
 
 mongoose
-  .connect(MONGO_URI)
+  .connect(MONGO_URI, {
+    serverSelectionTimeoutMS: 30000,
+    connectTimeoutMS: 30000,
+  })
   .then(() => console.log('MongoDB connected successfully'))
   .catch((err) => { console.error('MongoDB connection failed:', err.message); process.exit(1); });
 

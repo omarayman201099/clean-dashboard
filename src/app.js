@@ -10,7 +10,7 @@ const compression = require('compression');
 const path = require('path');
 
 const config = require('./config');
-const { errorHandler } = require('./middlewares/errorHandler');
+const errorHandler = require('./middlewares/errorHandler');
 const { apiLimiter } = require('./middlewares/rateLimiter');
 const logger = require('./utils/logger');
 
@@ -31,8 +31,10 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "https://fonts.googleapis.com", "https://fonts.gstatic.com"],
     },
   },
 }));

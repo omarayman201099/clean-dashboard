@@ -17,7 +17,10 @@ module.exports = {
       maxPoolSize: 10,
       minPoolSize: 2,
       socketTimeoutMS: 45000,
-      serverSelectionTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 30000,
+      connectTimeoutMS: 30000,
+      retryWrites: true,
+      retryReads: true,
     },
   },
 
